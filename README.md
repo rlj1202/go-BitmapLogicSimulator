@@ -62,10 +62,22 @@ AND gate can be constructed like this.
 .##.##....
 ..##......
 ..........
+AND gate
 ```
 
 OR gate can be constructed using two wires merged.
 
+```
+..........
+.#####....
+.....####.
+.#####....
+..........
+```
+
 ### Simulation
 
-
+## TODO List
+- [*] simulation
+- [ ] file refresh per some certain time
+- [ ] load and save configuration

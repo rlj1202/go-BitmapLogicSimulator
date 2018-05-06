@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	BRIGHT_MIN = 223
+	BRIGHT_MIN = 57087 // 223(0xDF) for uint8, 57087(0xDEFF) for uint32
 
 	TIME_RAISE  = 0.5
 	TIME_FALL   = 0.5
@@ -203,33 +203,32 @@ func (simulator *Simulator) LoadImage(img image.Image) {
 
 	simulator.Simulate()
 
-	// ------------------------------------------------------------TEST BEGIN
+	simulator.test()
+}
+
+func (simulator *Simulator) test() {
 	// wire remapping test image
 	wireRemapImgFile, err := os.Create("wireMap.png")
 	if err != nil {
 		panic(err)
 	}
-	wireRemapImg := image.NewRGBA(img.Bounds())
+	wireRemapImg := image.NewRGBA(simulator.curImage.Bounds())
 
 	rand.Seed(time.Now().UTC().UnixNano())
 	randomRColor := rand.Perm(200)
 	randomGColor := rand.Perm(200)
 	randomBColor := rand.Perm(200)
 
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			wire := wireMap[y][x]
+	for y := 0; y < simulator.height; y++ {
+		for x := 0; x < simulator.width; x++ {
+			wire := simulator.wireMap[y][x]
 			if wire >= 0 {
-				idx := wireRemap[wire]
-				overlay := 0
-				if states[idx] {
-					overlay = 128
-				}
+				idx := simulator.wireRemap[wire]
 
 				wireRemapImg.Set(x, y, color.RGBA{
-					uint8(randomRColor[idx%200] + 56 - overlay),
-					uint8(randomGColor[idx%200] + 56 - overlay),
-					uint8(randomBColor[idx%200] + 56 - overlay),
+					uint8(randomRColor[idx%200] + 55),
+					uint8(randomGColor[idx%200] + 55),
+					uint8(randomBColor[idx%200] + 55),
 					255,
 				})
 			} else {
@@ -245,20 +244,19 @@ func (simulator *Simulator) LoadImage(img image.Image) {
 	if err != nil {
 		panic(err)
 	}
-	gateImg := image.NewRGBA(img.Bounds())
+	gateImg := image.NewRGBA(simulator.curImage.Bounds())
 
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := 0; y < simulator.height; y++ {
+		for x := 0; x < simulator.width; x++ {
 			gateImg.Set(x, y, color.RGBA{0, 0, 0, 0})
 		}
 	}
-	for _, gate := range gates {
+	for _, gate := range simulator.gates {
 		gateImg.Set(gate.in.x, gate.in.y, color.RGBA{255, 0, 0, 255})
 		gateImg.Set(gate.out.x, gate.out.y, color.RGBA{0, 255, 0, 255})
 	}
 
 	png.Encode(gateImgFile, gateImg)
-	// ---------------------------------------------------------TEST END
 }
 
 func (simulator *Simulator) Simulate() {
@@ -284,6 +282,19 @@ func (simulator *Simulator) Set(x, y int, state bool) bool {
 	return false
 }
 
+func (simulator *Simulator) Get(x, y int) bool {
+	wire := simulator.wireMap[y][x]
+
+	if wire >= 0 {
+		wireIdx := simulator.wireRemap[wire]
+		state := simulator.states[wireIdx]
+
+		return state
+	}
+
+	return false
+}
+
 func (simulator *Simulator) Size() (int, int) {
 	return simulator.width, simulator.height
 }
@@ -304,7 +315,7 @@ func (simulator *Simulator) PerPixel(f func(int, int, bool)) {
 func isConductive(pixel color.Color) bool {
 	r, g, b, _ := pixel.RGBA()
 
-	return r >= BRIGHT_MIN || g >= BRIGHT_MIN || b >= BRIGHT_MIN
+	return r > BRIGHT_MIN || g > BRIGHT_MIN || b > BRIGHT_MIN
 }
 
 func (simulator *Simulator) gateInput(g *gate) bool {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"image"
 	"image/draw"
 	_ "image/png"
@@ -47,22 +46,29 @@ const (
 	out vec4 color;
 
 	void main() {
-		vec4 a = texture2D(tex, fragTexCoord);
-		vec4 b = texture2D(tex2, fragTexCoord);
+		vec4 back = texture2D(tex, fragTexCoord);
+		vec4 overlay = back * texture2D(tex2, fragTexCoord);
 
-		color = mix(a, b, 0.7);
+		color = mix(back, overlay, 0.7);
 	}
 	`
 )
 
+const (
+	WINDOW_WIDTH  = 800
+	WINDOW_HEIGHT = 600
+	WINDOW_TITLE  = "go-BitmapLogicSimulator by rlj1202"
+)
+
 var simulator *gobls.Simulator
+var simulatePerFrame int = 10
 
 var programId uint32
 
 var overlayPBO uint32
 var overlayTex uint32
 
-var cameraZoom float32
+var cameraZoom float32 = 1.0
 var cameraX float32
 var cameraY float32
 
@@ -70,25 +76,29 @@ var MMB bool
 var prevCursorXPos float64
 var prevCursorYPos float64
 
+var mouseInteracting bool
+var mouseXIdx int
+var mouseYIdx int
+
 func main() {
+	imgFileName := "_circuit.png"
+
 	runtime.LockOSThread()
 
+	// init glfw
 	err := glfw.Init()
 	if err != nil {
 		panic(err)
 	}
 	defer glfw.Terminate()
 
-	width := 800
-	height := 600
-	title := "Test window"
-
+	// init window
 	glfw.WindowHint(glfw.Resizable, glfw.True)
 	glfw.WindowHint(glfw.ContextVersionMajor, 4)
 	glfw.WindowHint(glfw.ContextVersionMinor, 1)
 	glfw.WindowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile)
 	glfw.WindowHint(glfw.OpenGLForwardCompatible, glfw.True)
-	window, err := glfw.CreateWindow(width, height, title, nil, nil)
+	window, err := glfw.CreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -101,6 +111,7 @@ func main() {
 	window.MakeContextCurrent()
 	glfw.SwapInterval(1)
 
+	// init openGL
 	err = gl.Init()
 	if err != nil {
 		panic(err)
@@ -109,6 +120,9 @@ func main() {
 	version := gl.GoStr(gl.GetString(gl.VERSION))
 	log.Printf("OpenGL version : %s\n", version)
 
+	log.Println("load shader")
+
+	// load shader
 	vertexShaderId, err := loadShader(vertexShader, gl.VERTEX_SHADER)
 	if err != nil {
 		panic(err)
@@ -129,34 +143,9 @@ func main() {
 	tex2Loc := gl.GetUniformLocation(programId, gl.Str("tex2\x00"))
 	gl.Uniform1i(tex2Loc, 1)
 
-	imgFile, err := os.Open("../../test.png")
-	if err != nil {
-		panic(err)
-	}
-	img, _, err := image.Decode(imgFile)
-	if err != nil {
-		fmt.Println("test")
-		panic(err)
-	}
-	texId, err := loadTexture(img)
-	if err != nil {
-		panic(err)
-	}
+	log.Println("create vao")
 
-	// create PBO
-	gl.GenBuffers(1, &overlayPBO)
-	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
-	gl.BufferData(gl.PIXEL_UNPACK_BUFFER, 512*512*4, nil, gl.DYNAMIC_DRAW)
-	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
-
-	// create overlay texture
-	gl.GenTextures(1, &overlayTex)
-	gl.BindTexture(gl.TEXTURE_2D, overlayTex)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 512, 512, 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-
+	// create vao
 	positions := []float32{
 		-0.5, 0.5,
 		0.5, 0.5,
@@ -192,16 +181,36 @@ func main() {
 	gl.VertexAttribPointer(1, 2, gl.FLOAT, false, 0, nil)
 	gl.EnableVertexAttribArray(1)
 
-	cameraZoom = 1.0
-	updateScaleMat(512, 512)
-	updateCameraLocMat()
-	setProjectionMat(programId, float32(width), float32(height)/float32(width))
+	log.Println("load image")
+
+	// load image
+	imgFile, err := os.Open(imgFileName)
+	if err != nil {
+		panic(err)
+	}
+	img, _, err := image.Decode(imgFile)
+	if err != nil {
+		panic(err)
+	}
+	texId, err := loadTexture(img)
+	if err != nil {
+		panic(err)
+	}
+
+	log.Println("create simulation")
+
+	// create simulation, overlay PBO, overlay texture
+	simulator = gobls.NewSimulator()
+
+	log.Println("process image")
+
+	// load image
+	loadImage(img)
+
+	width, height := window.GetSize()
+	updateProjectionMat(programId, float32(width), float32(height)/float32(width))
 
 	gl.ClearColor(1, 0, 0, 1)
-
-	simulator = gobls.NewSimulator()
-	simulator.LoadImage(img)
-
 	for !window.ShouldClose() {
 		glfw.PollEvents()
 
@@ -213,10 +222,9 @@ func main() {
 		gl.BindTexture(gl.TEXTURE_2D, texId)
 		gl.ActiveTexture(gl.TEXTURE1)
 		gl.BindTexture(gl.TEXTURE_2D, overlayTex)
-
 		gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 6)
 
-		for i := 0; i < 5; i++ {
+		for i := 0; i < simulatePerFrame; i++ {
 			simulator.Simulate()
 		}
 
@@ -224,9 +232,36 @@ func main() {
 	}
 }
 
-func updateScaleMat(x, y float32) {
+func loadImage(img image.Image) {
+	simulator.LoadImage(img)
+
+	width, height := simulator.Size()
+
+	if overlayPBO == 0 {
+		gl.GenBuffers(1, &overlayPBO)
+	}
+	if overlayTex == 0 {
+		gl.GenTextures(1, &overlayTex)
+	}
+
+	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
+	gl.BufferData(gl.PIXEL_UNPACK_BUFFER, width*height*4, nil, gl.STREAM_DRAW)
+	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
+
+	gl.BindTexture(gl.TEXTURE_2D, overlayTex)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(width), int32(height), 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	updateScaleMat(float32(width), float32(height), cameraZoom)
+	updateCameraLocMat()
+}
+
+func updateScaleMat(x, y, zoom float32) {
+	log.Printf("update scale mat : x = %f, y = %f, zoom = %f\n", x, y, zoom)
 	scaleLoc := gl.GetUniformLocation(programId, gl.Str("scale\x00"))
-	scaleMat := mgl32.Scale3D(x, y, 1)
+	scaleMat := mgl32.Scale3D(x*zoom, y*zoom, 1)
 	gl.UniformMatrix4fv(scaleLoc, 1, false, &scaleMat[0])
 }
 
@@ -238,9 +273,10 @@ func updateCameraLocMat() {
 
 func updateOverlayTex() {
 	width, height := simulator.Size()
+
 	// update PBO
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
-	overlayPBOPtr := gl.MapBuffer(gl.PIXEL_UNPACK_BUFFER, gl.READ_WRITE)
+	overlayPBOPtr := gl.MapBuffer(gl.PIXEL_UNPACK_BUFFER, gl.WRITE_ONLY)
 	if overlayPBOPtr != nil {
 		overlayPBOSlice := (*[1 << 30]byte)(overlayPBOPtr)[:width*height*4 : width*height*4]
 
@@ -260,7 +296,7 @@ func updateOverlayTex() {
 
 		success := gl.UnmapBuffer(gl.PIXEL_UNPACK_BUFFER)
 		if !success {
-			log.Println("There was a problem unmapping pbo.")
+			log.Println("There was a problem unmapping PBO.")
 		}
 	}
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
@@ -268,9 +304,20 @@ func updateOverlayTex() {
 	// unpack PBO to overlay texture
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
 	gl.BindTexture(gl.TEXTURE_2D, overlayTex)
-	gl.TexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 512, gl.RGBA, gl.UNSIGNED_BYTE, gl.PtrOffset(0))
+	gl.TexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.PtrOffset(0))
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, 0)
+}
+
+func updateProjectionMat(shaderProgram uint32, width, ratio float32) {
+	height := width * ratio
+	log.Printf("Set size : %f, %f\n", width, height)
+
+	hw := width / 2.0
+	hh := height / 2.0
+	projectionLoc := gl.GetUniformLocation(programId, gl.Str("projection\x00"))
+	projectionMat := mgl32.Ortho2D(-hw, hw, -hh, hh)
+	gl.ProgramUniformMatrix4fv(shaderProgram, projectionLoc, 1, false, &(projectionMat[0]))
 }
 
 func loadTexture(img image.Image) (uint32, error) {
@@ -319,27 +366,39 @@ func loadShader(rawSource string, shaderType uint32) (uint32, error) {
 	return shader, nil
 }
 
-func setProjectionMat(shaderProgram uint32, width, ratio float32) {
-	height := width * ratio
-	hw := width / 2.0
-	hh := height / 2.0
-	projectionLoc := gl.GetUniformLocation(programId, gl.Str("projection\x00"))
-	projectionMat := mgl32.Ortho2D(-hw, hw, -hh, hh)
-	gl.ProgramUniformMatrix4fv(shaderProgram, projectionLoc, 1, false, &(projectionMat[0]))
-	fmt.Printf("Set size : %f, %f\n", width, height)
-}
-
 func sizeCallback(w *glfw.Window, width, height int) {
 	gl.Viewport(0, 0, int32(width), int32(height))
-	setProjectionMat(programId, float32(width), float32(height)/float32(width))
+	updateProjectionMat(programId, float32(width), float32(height)/float32(width))
 }
 
 func scrollCallback(w *glfw.Window, xoff, yoff float64) {
-	cameraZoom += float32(yoff / 10.0)
-	updateScaleMat(512*cameraZoom, 512*cameraZoom)
+	width, height := simulator.Size()
+
+	cameraZoom += float32(yoff / 20.0)
+	if cameraZoom < 0.5 {
+		cameraZoom = 0.5
+	}
+	updateScaleMat(float32(width), float32(height), cameraZoom)
+}
+
+func cursorToImagePoint(w *glfw.Window, x, y float64) (int, int) {
+	screenWidth, screenHeight := w.GetSize()
+	simWidth, simHeight := simulator.Size()
+
+	oriX := (x-float64(screenWidth)/2)/float64(simWidth)/float64(cameraZoom) - float64(cameraX)
+	oriY := (y-float64(screenHeight)/2)/float64(simHeight)/float64(cameraZoom) - float64(cameraY)
+
+	xIdx := int((oriX + 0.5) * float64(simWidth))
+	yIdx := int((oriY + 0.5) * float64(simHeight))
+
+	return xIdx, yIdx
 }
 
 func mouseButtonCallback(w *glfw.Window, button glfw.MouseButton, action glfw.Action, mod glfw.ModifierKey) {
+	x, y := w.GetCursorPos()
+	xIdx, yIdx := cursorToImagePoint(w, x, y)
+	simWidth, simHeight := simulator.Size()
+
 	if button == glfw.MouseButtonMiddle {
 		switch action {
 		case glfw.Press:
@@ -349,30 +408,42 @@ func mouseButtonCallback(w *glfw.Window, button glfw.MouseButton, action glfw.Ac
 			MMB = false
 		}
 	} else if button == glfw.MouseButtonLeft {
-		x, y := w.GetCursorPos()
-		width, height := w.GetSize()
+		if 0 <= xIdx && xIdx < simWidth && 0 <= yIdx && yIdx < simHeight {
+			if action == glfw.Press {
+				mouseInteracting = true
+				mouseXIdx = xIdx
+				mouseYIdx = yIdx
 
-		oriX := (x-float64(width)/2)/float64(512*cameraZoom) - float64(cameraX)
-		oriY := (y-float64(height)/2)/float64(512*cameraZoom) - float64(cameraY)
-
-		xIdx := int((oriX + 0.5) * 512)
-		yIdx := int((oriY + 0.5) * 512)
-
-		if action == glfw.Press {
-			simulator.Set(xIdx, yIdx, true)
-		} else if action == glfw.Release {
-			simulator.Set(xIdx, yIdx, false)
+				simulator.Set(xIdx, yIdx, true)
+			} else if action == glfw.Release {
+				if mouseInteracting {
+					mouseInteracting = false
+					simulator.Set(mouseXIdx, mouseYIdx, false)
+				}
+			}
+		}
+	} else if button == glfw.MouseButtonRight {
+		if 0 <= xIdx && xIdx < simWidth && 0 <= yIdx && yIdx < simHeight {
+			if action == glfw.Press {
+				state := simulator.Get(xIdx, yIdx)
+				if state {
+					simulator.Set(xIdx, yIdx, false)
+				} else {
+					simulator.Set(xIdx, yIdx, true)
+				}
+			}
 		}
 	}
 }
 
 func cursorPosCallback(w *glfw.Window, xpos, ypos float64) {
 	if MMB {
+		width, height := simulator.Size()
 		dx := xpos - prevCursorXPos
 		dy := ypos - prevCursorYPos
 
-		cameraX += float32(dx) / (float32(512) * cameraZoom)
-		cameraY += float32(dy) / (float32(512) * cameraZoom)
+		cameraX += float32(dx) / (float32(width) * cameraZoom)
+		cameraY += float32(dy) / (float32(height) * cameraZoom)
 
 		prevCursorXPos = xpos
 		prevCursorYPos = ypos
