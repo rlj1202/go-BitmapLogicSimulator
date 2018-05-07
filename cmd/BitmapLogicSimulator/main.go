@@ -94,11 +94,6 @@ func main() {
 
 	log.Printf("config : %v\n", *c)
 
-	imgFile, err := os.Open(c.FileName)
-	if err != nil {
-		panic(err)
-	}
-
 	watcher, err := fsnotify.NewWatcher()
 	defer watcher.Close()
 	if err != nil {
@@ -213,8 +208,10 @@ func main() {
 	log.Println("process image")
 
 	// load image
-	loadImage(imgFile)
-	imgFile.Close()
+	err = loadImage(c.FileName)
+	if err != nil {
+		panic(err)
+	}
 
 	// start simulation
 	width, height := window.GetSize()
@@ -225,16 +222,16 @@ func main() {
 
 		gl.Clear(gl.COLOR_BUFFER_BIT)
 
+		// file refresh
 		select {
 		case event := <-watcher.Events:
 			if event.Name == c.FileName {
 				if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
 					log.Println("file refreshed.")
 
-					imgFile, err := os.Open(event.Name)
-					if err == nil {
-						loadImage(imgFile)
-						imgFile.Close()
+					err := loadImage(event.Name)
+					if err != nil {
+						log.Println(err)
 					}
 				}
 			}
@@ -243,26 +240,36 @@ func main() {
 		default:
 		}
 
+		// draw bitmap from current state
 		updateOverlayTex()
 
+		// render bitmap
 		gl.ActiveTexture(gl.TEXTURE0)
 		gl.BindTexture(gl.TEXTURE_2D, texId)
 		gl.ActiveTexture(gl.TEXTURE1)
 		gl.BindTexture(gl.TEXTURE_2D, overlayTex)
 		gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 6)
 
+		// simulate
 		for i := 0; i < c.SimulationsPerFrame; i++ {
 			simulator.Simulate()
 		}
 
+		// display
 		window.SwapBuffers()
 	}
 }
 
-func loadImage(imgFile *os.File) {
+func loadImage(imgFileName string) error {
+	imgFile, err := os.Open(imgFileName)
+	defer imgFile.Close()
+	if err != nil {
+		return err
+	}
+
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	if texId == 0 {
@@ -272,7 +279,7 @@ func loadImage(imgFile *os.File) {
 	}
 	err = loadTexture(img)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	simulator.LoadImage(img)
@@ -302,6 +309,8 @@ func loadImage(imgFile *os.File) {
 
 	updateScaleMat(float32(width), float32(height), cameraZoom)
 	updateCameraLocMat()
+
+	return nil
 }
 
 func updateScaleMat(x, y, zoom float32) {

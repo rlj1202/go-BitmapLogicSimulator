@@ -5,6 +5,9 @@ Original article is [https://realhet.wordpress.com/2015/09/02/bitmap-logic-simul
 
 The application is implemented with OpenGL.
 
+## Screenshots
+![](screenshots/2018_05_07_0.png)
+
 ## How does it work?
 ### Rules
 Usage is very simple. Draw circuit in your favorate image editor, and load the image!
@@ -82,3 +85,5 @@ OR gate can be constructed using two wires merged.
 - [x] File refresh per some certain time
 - [x] Load and save configuration
 - [ ] Optimization(performance, memory)
+- [ ] Gate and wire viewr(overlay)
+- [ ] User Interface
