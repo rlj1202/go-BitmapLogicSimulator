@@ -33,7 +33,7 @@ func (g *gate) updateState(newState bool) {
 			return
 		}
 
-		g.slowState += TIME_RAISE * rand.Float32()
+		g.slowState += TIME_RAISE + TIME_RANDOM*rand.Float32()
 
 		if g.slowState >= 1 {
 			g.slowState = 1
@@ -44,7 +44,7 @@ func (g *gate) updateState(newState bool) {
 			return
 		}
 
-		g.slowState -= TIME_FALL * rand.Float32()
+		g.slowState -= TIME_FALL + TIME_RANDOM*rand.Float32()
 
 		if g.slowState <= 0 {
 			g.slowState = 0
