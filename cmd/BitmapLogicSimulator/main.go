@@ -7,9 +7,11 @@ import (
 	_ "image/png"
 	"log"
 	"os"
+	"path"
 	"runtime"
 	"strings"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"github.com/go-gl/glfw/v3.2/glfw"
 	"github.com/go-gl/mathgl/mgl32"
@@ -60,10 +62,13 @@ const (
 	WINDOW_TITLE  = "go-BitmapLogicSimulator by rlj1202"
 )
 
+var watcher *fsnotify.Watcher
+
 var simulator *gobls.Simulator
-var simulatePerFrame int = 10
 
 var programId uint32
+
+var texId uint32
 
 var overlayPBO uint32
 var overlayTex uint32
@@ -81,12 +86,30 @@ var mouseXIdx int
 var mouseYIdx int
 
 func main() {
-	imgFileName := "_circuit.png"
+	c, err := loadConfig("config.json")
+	defer saveConfig("config.json", c)
+	if err != nil {
+		panic(err)
+	}
+
+	log.Printf("config : %v\n", *c)
+
+	imgFile, err := os.Open(c.FileName)
+	if err != nil {
+		panic(err)
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	defer watcher.Close()
+	if err != nil {
+		panic(err)
+	}
+	watcher.Add(path.Dir(c.FileName))
 
 	runtime.LockOSThread()
 
 	// init glfw
-	err := glfw.Init()
+	err = glfw.Init()
 	if err != nil {
 		panic(err)
 	}
@@ -107,6 +130,7 @@ func main() {
 	window.SetScrollCallback(scrollCallback)
 	window.SetMouseButtonCallback(mouseButtonCallback)
 	window.SetCursorPosCallback(cursorPosCallback)
+	window.SetKeyCallback(keyCallback)
 
 	window.MakeContextCurrent()
 	glfw.SwapInterval(1)
@@ -181,22 +205,6 @@ func main() {
 	gl.VertexAttribPointer(1, 2, gl.FLOAT, false, 0, nil)
 	gl.EnableVertexAttribArray(1)
 
-	log.Println("load image")
-
-	// load image
-	imgFile, err := os.Open(imgFileName)
-	if err != nil {
-		panic(err)
-	}
-	img, _, err := image.Decode(imgFile)
-	if err != nil {
-		panic(err)
-	}
-	texId, err := loadTexture(img)
-	if err != nil {
-		panic(err)
-	}
-
 	log.Println("create simulation")
 
 	// create simulation, overlay PBO, overlay texture
@@ -205,16 +213,35 @@ func main() {
 	log.Println("process image")
 
 	// load image
-	loadImage(img)
+	loadImage(imgFile)
+	imgFile.Close()
 
+	// start simulation
 	width, height := window.GetSize()
 	updateProjectionMat(programId, float32(width), float32(height)/float32(width))
-
-	gl.ClearColor(1, 0, 0, 1)
+	gl.ClearColor(0.1, 0.1, 0.1, 1)
 	for !window.ShouldClose() {
 		glfw.PollEvents()
 
 		gl.Clear(gl.COLOR_BUFFER_BIT)
+
+		select {
+		case event := <-watcher.Events:
+			if event.Name == c.FileName {
+				if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("file refreshed.")
+
+					imgFile, err := os.Open(event.Name)
+					if err == nil {
+						loadImage(imgFile)
+						imgFile.Close()
+					}
+				}
+			}
+		case err = <-watcher.Errors:
+			log.Printf("file watcher err : %v\n", err)
+		default:
+		}
 
 		updateOverlayTex()
 
@@ -224,7 +251,7 @@ func main() {
 		gl.BindTexture(gl.TEXTURE_2D, overlayTex)
 		gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 6)
 
-		for i := 0; i < simulatePerFrame; i++ {
+		for i := 0; i < c.SimulationsPerFrame; i++ {
 			simulator.Simulate()
 		}
 
@@ -232,16 +259,35 @@ func main() {
 	}
 }
 
-func loadImage(img image.Image) {
+func loadImage(imgFile *os.File) {
+	img, _, err := image.Decode(imgFile)
+	if err != nil {
+		panic(err)
+	}
+
+	if texId == 0 {
+		gl.GenTextures(1, &texId)
+
+		log.Println("gen texture name.")
+	}
+	err = loadTexture(img)
+	if err != nil {
+		panic(err)
+	}
+
 	simulator.LoadImage(img)
 
 	width, height := simulator.Size()
 
 	if overlayPBO == 0 {
 		gl.GenBuffers(1, &overlayPBO)
+
+		log.Println("gen overlay PBO name.")
 	}
 	if overlayTex == 0 {
 		gl.GenTextures(1, &overlayTex)
+
+		log.Println("gen overlay texture name.")
 	}
 
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
@@ -320,15 +366,13 @@ func updateProjectionMat(shaderProgram uint32, width, ratio float32) {
 	gl.ProgramUniformMatrix4fv(shaderProgram, projectionLoc, 1, false, &(projectionMat[0]))
 }
 
-func loadTexture(img image.Image) (uint32, error) {
-	texId := uint32(0)
-	gl.GenTextures(1, &texId)
+func loadTexture(img image.Image) error {
 	gl.BindTexture(gl.TEXTURE_2D, texId)
 
 	rgba := image.NewRGBA(img.Bounds())
 
 	if rgba.Stride != rgba.Rect.Size().X*4 {
-		return 0, errors.New("Unsupported stride.")
+		return errors.New("Unsupported stride.")
 	}
 	draw.Draw(rgba, rgba.Bounds(), img, image.Point{0, 0}, draw.Src)
 
@@ -339,7 +383,7 @@ func loadTexture(img image.Image) (uint32, error) {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
 
-	return texId, nil
+	return nil
 }
 
 func loadShader(rawSource string, shaderType uint32) (uint32, error) {
@@ -448,6 +492,32 @@ func cursorPosCallback(w *glfw.Window, xpos, ypos float64) {
 		prevCursorXPos = xpos
 		prevCursorYPos = ypos
 
+		updateCameraLocMat()
+	}
+}
+
+func keyCallback(w *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
+	if glfw.KeyKP0 <= key && key <= glfw.KeyKP9 && action == glfw.Press {
+		width, height := simulator.Size()
+
+		switch key {
+		case glfw.KeyKP0:
+			cameraZoom = 1.0
+			cameraX = 0.0
+			cameraY = 0.0
+		case glfw.KeyKP1:
+			cameraZoom = 1.0
+		case glfw.KeyKP2:
+			cameraZoom = 2.0
+		case glfw.KeyKP3:
+			cameraZoom = 3.0
+		case glfw.KeyKP4:
+			cameraZoom = 4.0
+		case glfw.KeyKP5:
+			cameraZoom = 5.0
+		}
+
+		updateScaleMat(float32(width), float32(height), cameraZoom)
 		updateCameraLocMat()
 	}
 }

@@ -182,16 +182,18 @@ func (simulator *Simulator) LoadImage(img image.Image) {
 		states[i] = false
 	}
 
-	// load previous states
-	if simulator.prevImage != nil {
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				if wireMap[y][x] != 0 && isConductive(simulator.prevImage.At(x, y)) {
-					states[wireRemap[wireMap[y][x]]] = true
+	// copy previous states
+	/*
+		if simulator.prevImage != nil {
+			for y := 0; y < height; y++ {
+				for x := 0; x < width; x++ {
+					if wireMap[y][x] != 0 && isConductive(simulator.prevImage.At(x, y)) {
+						states[wireRemap[wireMap[y][x]]] = true
+					}
 				}
 			}
 		}
-	}
+	*/
 
 	simulator.width = width
 	simulator.height = height

@@ -78,6 +78,7 @@ OR gate can be constructed using two wires merged.
 ### Simulation
 
 ## TODO List
-- [x] simulation
-- [ ] file refresh per some certain time
-- [ ] load and save configuration
+- [x] Simulation
+- [x] File refresh per some certain time
+- [x] Load and save configuration
+- [ ] Optimization(performance, memory)
