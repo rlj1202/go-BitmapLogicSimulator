@@ -48,8 +48,8 @@ const (
 	out vec4 color;
 
 	void main() {
-		vec4 back = texture2D(tex, fragTexCoord);
-		vec4 overlay = back * texture2D(tex2, fragTexCoord);
+		vec4 back = texture(tex, fragTexCoord);
+		vec4 overlay = back * texture(tex2, fragTexCoord);
 
 		color = mix(back, overlay, 0.7);
 	}
@@ -333,7 +333,7 @@ func updateOverlayTex() {
 	gl.BindBuffer(gl.PIXEL_UNPACK_BUFFER, overlayPBO)
 	overlayPBOPtr := gl.MapBuffer(gl.PIXEL_UNPACK_BUFFER, gl.WRITE_ONLY)
 	if overlayPBOPtr != nil {
-		overlayPBOSlice := (*[1 << 30]byte)(overlayPBOPtr)[:width*height*4 : width*height*4]
+		overlayPBOSlice := (*[1 << 30]byte)(overlayPBOPtr)[: width*height*4 : width*height*4]
 
 		simulator.PerPixel(func(x, y int, state bool) {
 			index := x + y*width
